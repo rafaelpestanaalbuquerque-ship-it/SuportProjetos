@@ -669,14 +669,22 @@ function cartaoLojasCliente(ativas, concluidas) {
 // PDF da checklist de uma loja (jsPDF, carregado só quando é preciso).
 // As fontes base do PDF não têm emojis: ficam de fora, os acentos mantêm-se.
 const latin = (s) => String(s ?? "").replace(/[–—]/g, "-").replace(/[^\x00-\xFF]/g, "").replace(/\s+/g, " ").trim();
+// Carrega um <script> clássico uma só vez (o jsPDF em UMD; o plugin acrescenta doc.autoTable)
+const scripts = {};
+const carregarScript = (src) => (scripts[src] ??= new Promise((ok, falha) => {
+  const s = el("script", { src });
+  s.onload = ok;
+  s.onerror = () => { delete scripts[src]; falha(new Error(`não foi possível carregar ${src}`)); };
+  document.head.append(s);
+}));
+
 async function pdfChecklist(r, botao) {
   if (botao) botao.disabled = true;
   try {
-    const [{ jsPDF }, at] = await Promise.all([
-      import("https://cdn.jsdelivr.net/npm/jspdf@2.5.2/+esm"),
-      import("https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.4/+esm"),
-    ]);
-    const autoTable = at.default || at.autoTable;
+    await carregarScript("https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.js");
+    await carregarScript("https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.4/dist/jspdf.plugin.autotable.min.js");
+    const { jsPDF } = window.jspdf;
+    const autoTable = (doc, opcoes) => doc.autoTable(opcoes);
     const p = proj(r);
     const doc = new jsPDF({ unit: "mm", format: "a4" });
     doc.setFontSize(16);
