@@ -518,6 +518,209 @@ function historico(hist) {
   }));
 }
 
+// ---------- Vista do cliente (aberta, sem login) ----------
+// Sem login lê só a função painel_cliente() (supabase/cliente.sql): sem telemóvel, IP, responsáveis nem notas do registo.
+const GRUPOS = [
+  ["🔄 Em curso", (s) => s.includes("Em curso"), "#3b82f6"],
+  ["⏳ Por iniciar", (s) => s.includes("Por iniciar"), "#9ca3af"],
+  ["⚠️ Pendentes / Bloqueadas", (s) => s.includes("Pendente") || s.includes("Bloqueado"), "#f59e0b"],
+  ["✅ Concluídas", (s) => s === CONCLUIDO, "#22c55e"],
+];
+const corEstado = (s) => (GRUPOS.find(([, f]) => f(s || "")) || [0, 0, "#9ca3af"])[2];
+const comBolinha = (s) => el("span", {}, el("span", { style: `color:${corEstado(s)}` }, "● "), s || "-");
+const urs = (r) =>
+  [["ur_sistemas", "UR Sistemas"], ["ur_nagios", "UR Nagios"], ["ur", "UR"], ["pedido_zetes", "Pedido Zetes"]]
+    .filter(([k]) => r[k]).map(([k, t]) => `${t}: ${r[k]}`);
+
+let sessaoAtual = null, clienteCarregado = false, clienteEm = null, cliProjeto = "", cliBusca = "";
+
+async function carregarCliente() {
+  const { data, error } = await sb.rpc("painel_cliente");
+  if (error) throw error;
+  const porRegisto = new Map();
+  (data.tarefas || []).forEach((t) => {
+    if (!porRegisto.has(t.registo_id)) porRegisto.set(t.registo_id, []);
+    porRegisto.get(t.registo_id).push(t);
+  });
+  dados = { registos: data.registos || [], porRegisto };
+  clienteCarregado = true;
+  clienteEm = data.gerado_em;
+}
+
+async function atualizarCliente() {
+  try {
+    if (sessaoAtual) await carregar(); else await carregarCliente();
+    if (sessaoAtual) clienteEm = new Date().toISOString();
+    vistaCliente();
+  } catch (e) {
+    avisar(`Erro a atualizar: ${e.message}`);
+  }
+}
+
+function barra(r) {
+  const l = tarefasDe(r);
+  if (!l.length) return "-";
+  const pct = Math.round((l.filter(feita).length / l.length) * 100);
+  return el("span", { class: "progresso", title: `${pct}%` }, el("span", { class: "barra" }, el("span", { style: `width:${pct}%` })), ` ${progresso(r)}`);
+}
+
+const botaoPdf = (r) => el("button", { title: "Descarregar a checklist em PDF", onclick: (e) => pdfChecklist(r, e.currentTarget) }, "⬇️ PDF");
+
+async function vistaCliente() {
+  document.getElementById("topo").hidden = !sessaoAtual;
+  if (!sessaoAtual && !clienteCarregado) {
+    $app.replaceChildren(el("p", { class: "aviso" }, "A carregar…"));
+    try {
+      await carregarCliente();
+    } catch (e) {
+      return $app.replaceChildren(el("p", {}, `Erro a ler os dados: ${e.message}`), el("a", { href: "#/login" }, "🔐 Entrar (equipa)"));
+    }
+  }
+  const regs = dados.registos.filter((r) => r.status !== CANCELADO);
+  const ativas = regs.filter((r) => !r.arquivado && r.status !== CONCLUIDO);
+  const ha30 = maisDias(hoje(), -30);
+  const concluidas = regs.filter((r) => r.status === CONCLUIDO);
+  const recentes = concluidas.filter((r) => (r.data_conclusao || r.data || "") >= ha30);
+  const conta = (lista, i) => lista.filter((r) => GRUPOS[i][1](r.status || "")).length;
+  const numero = (n, cor) => el("b", { style: `color:${cor}` }, n);
+
+  const tiles = el("div", { class: "tiles" },
+    el("div", { class: "tile" }, el("span", {}, "🏬 Lojas ativas"), el("b", {}, ativas.length)),
+    GRUPOS.slice(0, 3).map(([nome, , cor], i) => el("div", { class: "tile" }, el("span", {}, nome), numero(conta(ativas, i), cor))),
+    el("div", { class: "tile" }, el("span", {}, "✅ Concluídas (30 dias)"), numero(recentes.length, GRUPOS[3][2])));
+
+  const porProjeto = tabela(["Projeto", "Ativas", ...GRUPOS.slice(0, 3).map((g) => g[0]), "✅ Concluídas (30 dias)"],
+    Object.entries(PROJETOS).map(([dir, p]) => {
+      const a = ativas.filter((r) => r.projeto === dir);
+      return el("tr", {},
+        el("td", {}, el("a", { href: "#/cliente", onclick: async (e) => {
+          e.preventDefault();
+          cliProjeto = dir;
+          await vistaCliente();
+          document.getElementById("lojas")?.scrollIntoView({ behavior: "smooth" });
+        } }, p.nome)),
+        el("td", {}, a.length),
+        GRUPOS.slice(0, 3).map(([, , cor], i) => el("td", {}, numero(conta(a, i), cor))),
+        el("td", {}, numero(recentes.filter((r) => r.projeto === dir).length, GRUPOS[3][2])));
+    }));
+
+  const limite = maisDias(hoje(), 14);
+  const ongoing = ativas.filter((r) => r.data && r.data >= hoje() && r.data <= limite).sort(porData);
+
+  $app.replaceChildren(
+    el("div", { class: "linha-form", style: "justify-content:space-between;margin-bottom:.6rem" },
+      el("h1", { style: "margin:0" }, "🏪 Lidl – Estado dos Projetos"),
+      el("div", { class: "linha-form" },
+        el("span", { class: "resumo", style: "margin:0" }, `Atualizado: ${new Date(clienteEm || Date.now()).toLocaleString("pt-PT")} · Winprovit`),
+        el("button", { onclick: atualizarCliente }, "🔄 Atualizar"),
+        sessaoAtual ? el("a", { href: "#/" }, "← Dashboard") : el("a", { href: "#/login", class: "botao" }, "🔐 Entrar (equipa)"))),
+    el("div", { class: "cartao azul" }, el("h2", {}, "📈 Resumo"), tiles, porProjeto),
+    el("div", { class: "cartao verde", style: "margin-top:1rem" },
+      el("h2", {}, "📅 Ongoing"),
+      el("p", { class: "resumo" }, `De ${fmt(hoje())} a ${fmt(limite)} · ${ongoing.length} trabalho(s)`),
+      ongoing.length === 0
+        ? el("p", {}, "Sem trabalhos planeados para as próximas 2 semanas.")
+        : tabela(["Data", "Quando", "Projeto", "Loja", "Estado", "Progresso", "Checklist"], ongoing.map((r) =>
+            el("tr", {}, el("td", {}, fmt(r.data)), el("td", {}, quando(r.data)), el("td", {}, proj(r).nome), el("td", {}, el("b", {}, r.loja)),
+              el("td", {}, comBolinha(r.status)), el("td", {}, barra(r)), el("td", {}, botaoPdf(r)))))),
+    cartaoLojasCliente(ativas, concluidas)
+  );
+}
+
+function cartaoLojasCliente(ativas, concluidas) {
+  const filtra = (lista) => lista.filter((r) => (!cliProjeto || r.projeto === cliProjeto) && (!cliBusca || String(r.loja).toLowerCase().includes(cliBusca)));
+  const cartao = el("div", { class: "cartao", id: "lojas", style: "margin-top:1rem" });
+  const desenhar = () => {
+    const a = filtra(ativas).sort(porData);
+    const c = filtra(concluidas).sort((x, y) => (y.data_conclusao || y.data || "").localeCompare(x.data_conclusao || x.data || ""));
+    corpo.replaceChildren(
+      el("h2", { style: "margin-top:1rem" }, `🏬 Lojas ativas (${a.length})`),
+      a.length === 0 ? el("p", { class: "resumo" }, "Nenhuma loja.") :
+        tabela(["Projeto", "Loja", "Data", "Estado", "Progresso", "URs", "Checklist"], a.map((r) =>
+          el("tr", {}, el("td", {}, proj(r).nome), el("td", {}, el("b", {}, r.loja)), el("td", {}, fmt(r.data)), el("td", {}, comBolinha(r.status)),
+            el("td", {}, barra(r)), el("td", {}, urs(r).map((u) => el("div", {}, u))), el("td", {}, botaoPdf(r))))),
+      el("h2", { style: "margin-top:1.2rem" }, `✅ Concluídas (${c.length})`),
+      c.length === 0 ? el("p", { class: "resumo" }, "Nenhuma loja.") :
+        tabela(["Projeto", "Loja", "Data", "Data conclusão", "URs", "Checklist"], c.map((r) =>
+          el("tr", {}, el("td", {}, proj(r).nome), el("td", {}, el("b", {}, r.loja)), el("td", {}, fmt(r.data)), el("td", {}, fmt(r.data_conclusao)),
+            el("td", {}, urs(r).map((u) => el("div", {}, u))), el("td", {}, botaoPdf(r)))))
+    );
+  };
+  const chips = el("div", { class: "chips" },
+    [["", "Todos"], ...Object.entries(PROJETOS).map(([dir, p]) => [dir, p.nome])].map(([dir, nome]) =>
+      el("button", { class: cliProjeto === dir ? "ativo" : "", onclick: (e) => {
+        cliProjeto = dir;
+        chips.querySelectorAll("button").forEach((b) => b.classList.toggle("ativo", b === e.currentTarget));
+        desenhar();
+      } }, nome)));
+  const busca = el("input", { type: "text", placeholder: "🔎 Nº da loja", value: cliBusca, oninput: () => { cliBusca = busca.value.toLowerCase().trim(); desenhar(); } });
+  const corpo = el("div");
+  cartao.append(el("h2", {}, "🔎 Lojas e checklists"), el("div", { class: "linha-form" }, chips, busca), corpo);
+  desenhar();
+  return cartao;
+}
+
+// PDF da checklist de uma loja (jsPDF, carregado só quando é preciso).
+// As fontes base do PDF não têm emojis: ficam de fora, os acentos mantêm-se.
+const latin = (s) => String(s ?? "").replace(/[–—]/g, "-").replace(/[^\x00-\xFF]/g, "").replace(/\s+/g, " ").trim();
+async function pdfChecklist(r, botao) {
+  if (botao) botao.disabled = true;
+  try {
+    const [{ jsPDF }, at] = await Promise.all([
+      import("https://cdn.jsdelivr.net/npm/jspdf@2.5.2/+esm"),
+      import("https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.4/+esm"),
+    ]);
+    const autoTable = at.default || at.autoTable;
+    const p = proj(r);
+    const doc = new jsPDF({ unit: "mm", format: "a4" });
+    doc.setFontSize(16);
+    doc.text(latin(`Checklist - Loja ${r.loja}`), 14, 18);
+    doc.setFontSize(11);
+    doc.text(latin(p.nome), 14, 25);
+    const info = [
+      ["Data", fmt(r.data)],
+      ["Estado", latin(r.status) || "-"],
+      ["Progresso", progresso(r)],
+      r.data_conclusao && ["Data conclusão", fmt(r.data_conclusao)],
+      r.tipo_trabalho && ["Tipo de trabalho", latin(r.tipo_trabalho)],
+      ...urs(r).map((u) => [u.slice(0, u.indexOf(": ")), latin(u.slice(u.indexOf(": ") + 2))]),
+    ].filter(Boolean);
+    autoTable(doc, { startY: 30, body: info, theme: "plain", styles: { fontSize: 10, cellPadding: 1 }, columnStyles: { 0: { fontStyle: "bold", cellWidth: 40 } } });
+
+    const lista = tarefasDe(r);
+    const corpo = [];
+    let fase = null;
+    lista.forEach((t) => {
+      if (t.fase && t.fase !== fase) {
+        fase = t.fase;
+        const daFase = lista.filter((x) => x.fase === t.fase);
+        corpo.push([{ content: latin(`${t.fase} (${daFase.filter(feita).length}/${daFase.length})`), colSpan: 3, styles: { fontStyle: "bold", fillColor: [238, 240, 243] } }]);
+      }
+      corpo.push([latin(t.tarefa), latin(t.status), latin(t.notas)]);
+    });
+    autoTable(doc, {
+      startY: doc.lastAutoTable.finalY + 6,
+      head: [["Tarefa", "Estado", "Notas"]],
+      body: corpo.length ? corpo : [[{ content: "Este registo não tem checklist.", colSpan: 3 }]],
+      styles: { fontSize: 9 },
+      headStyles: { fillColor: [37, 99, 235] },
+      columnStyles: { 0: { cellWidth: 80 }, 1: { cellWidth: 32 } },
+    });
+    const paginas = doc.getNumberOfPages();
+    for (let i = 1; i <= paginas; i++) {
+      doc.setPage(i);
+      doc.setFontSize(8);
+      doc.setTextColor(120);
+      doc.text(`Gerado a ${new Date().toLocaleString("pt-PT")} · Winprovit · Página ${i}/${paginas}`, 14, 290);
+    }
+    doc.save(`Checklist_${r.loja}_${r.projeto}.pdf`);
+  } catch (e) {
+    avisar(`Não foi possível gerar o PDF: ${e.message}`);
+  } finally {
+    if (botao) botao.disabled = false;
+  }
+}
+
 // ---------- Login ----------
 function vistaLogin() {
   document.getElementById("topo").hidden = true;
@@ -527,7 +730,8 @@ function vistaLogin() {
   const form = el("form", { class: "cartao login" },
     el("h1", {}, "📋 Lidl Projetos"),
     el("p", {}, email), el("p", {}, senha), entrar,
-    el("p", { class: "resumo" }, "As contas são criadas pelo administrador no Supabase."));
+    el("p", { class: "resumo" }, "As contas são criadas pelo administrador no Supabase."),
+    el("p", {}, el("a", { href: "#/" }, "← Voltar à vista do cliente")));
   form.onsubmit = async (e) => {
     e.preventDefault();
     entrar.disabled = true;
@@ -546,14 +750,23 @@ function menu() {
   document.getElementById("menu").replaceChildren(
     el("a", { href: "#/", class: atual === "#/" ? "ativo" : "" }, "Dashboard"),
     ...Object.entries(PROJETOS).map(([dir, p]) =>
-      el("a", { href: `#/projeto/${dir}`, class: atual.includes(`/${dir}`) ? "ativo" : "" }, p.nome))
+      el("a", { href: `#/projeto/${dir}`, class: atual.includes(`/${dir}`) ? "ativo" : "" }, p.nome)),
+    el("a", { href: "#/cliente", class: atual === "#/cliente" ? "ativo" : "" }, "👁️ Vista cliente")
   );
+}
+
+// Sem login: vista do cliente, ou o formulário de login em #/login
+function rotaSemLogin() {
+  if (location.hash === "#/login") return vistaLogin();
+  vistaAtual = vistaCliente;
+  vistaCliente();
 }
 
 function rota() {
   const [, pagina, arg] = (location.hash.slice(1) || "/").split("/");
   menu();
-  if (pagina === "projeto") vistaAtual = () => vistaProjeto(arg, false);
+  if (pagina === "cliente") vistaAtual = vistaCliente;
+  else if (pagina === "projeto") vistaAtual = () => vistaProjeto(arg, false);
   else if (pagina === "arquivo") vistaAtual = () => vistaProjeto(arg, true);
   else if (pagina === "registo") vistaAtual = () => vistaRegisto(arg);
   else vistaAtual = vistaDashboard;
@@ -563,10 +776,13 @@ function rota() {
 
 let canal = null;
 async function iniciar(sessao) {
+  sessaoAtual = sessao;
+  clienteCarregado = false;
   if (!sessao) {
     if (canal) { sb.removeChannel(canal); canal = null; }
-    return vistaLogin();
+    return rotaSemLogin();
   }
+  if (location.hash === "#/login") history.replaceState(null, "", "#/");
   document.getElementById("topo").hidden = false;
   document.getElementById("utilizador").textContent = sessao.user.email;
   try {
@@ -584,8 +800,13 @@ async function iniciar(sessao) {
   rota();
 }
 
-window.addEventListener("hashchange", () => sb.auth.getSession().then(({ data }) => data.session && rota()));
+window.addEventListener("hashchange", () => sb.auth.getSession().then(({ data }) => (data.session ? rota() : rotaSemLogin())));
 document.getElementById("sair").onclick = () => sb.auth.signOut();
+
+// Vista do cliente sem login: volta a ler os dados de 5 em 5 minutos (sem login não há tempo real)
+setInterval(() => {
+  if (!sessaoAtual && vistaAtual === vistaCliente && location.hash !== "#/login" && document.visibilityState === "visible") atualizarCliente();
+}, 5 * 60 * 1000);
 
 let ultimaSessao;
 sb.auth.onAuthStateChange((evento, sessao) => {

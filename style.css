@@ -64,3 +64,15 @@ button.discreto { border: none; background: none; color: var(--suave); }
 
 #toast { position: fixed; bottom: 1rem; right: 1rem; display: flex; flex-direction: column; gap: .4rem; z-index: 10; }
 #toast div { background: #111827; color: #fff; padding: .5rem .8rem; border-radius: 6px; box-shadow: 0 2px 8px #0004; }
+
+/* Vista do cliente */
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: .6rem; margin-bottom: 1rem; }
+.tile { border: 1px solid var(--linha); border-radius: 8px; padding: .6rem .8rem; display: flex; flex-direction: column; gap: .2rem; }
+.tile span { font-size: 12px; color: var(--suave); }
+.tile b { font-size: 24px; }
+.progresso { white-space: nowrap; }
+.barra { display: inline-block; width: 80px; height: 8px; border-radius: 4px; background: var(--linha); vertical-align: middle; overflow: hidden; }
+.barra span { display: block; height: 100%; background: var(--verde); }
+.chips { display: flex; gap: .3rem; flex-wrap: wrap; }
+.chips button.ativo { background: var(--azul); border-color: var(--azul); color: #fff; }
+a.botao { border: 1px solid var(--azul); border-radius: 6px; padding: .3rem .7rem; }
