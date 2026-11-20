@@ -223,12 +223,59 @@ async function render() {
 }
 
 // ---------- Dashboard ----------
+// Caixas do dashboard: [nome, função, ocupa a largura toda]
+const CARTOES = {
+  novo: ["➕ Novo registo", cartaoNovo, true],
+  ongoing: ["📅 Ongoing", cartaoOngoing],
+  semur: ["🔖 Sem UR", cartaoSemUR],
+  atraso: ["⚠️ Em atraso", cartaoAtraso],
+};
+
+// Ordem e caixas escondidas de cada pessoa (guardado neste browser, por email)
+const chavePrefs = () => `lidl.dashboard.${sessaoAtual?.user?.email || ""}`;
+function prefsDashboard() {
+  let p = null;
+  try { p = JSON.parse(localStorage.getItem(chavePrefs())); } catch { /* preferências estragadas: usa as de origem */ }
+  const ordem = (p?.ordem || []).filter((k) => k in CARTOES);
+  Object.keys(CARTOES).forEach((k) => !ordem.includes(k) && ordem.push(k)); // caixas novas vão para o fim
+  return { ordem, ocultos: (p?.ocultos || []).filter((k) => k in CARTOES) };
+}
+let aPersonalizar = false;
+
 function vistaDashboard() {
+  const p = prefsDashboard();
+  const visiveis = p.ordem.filter((k) => !p.ocultos.includes(k));
   $app.replaceChildren(
-    el("h1", {}, "📋 Dashboard de Acompanhamento"),
-    cartaoNovo(),
-    el("div", { class: "grelha", style: "margin-top:1rem" }, cartaoOngoing(), cartaoSemUR(), cartaoAtraso())
+    el("div", { class: "linha-form", style: "justify-content:space-between" },
+      el("h1", {}, "📋 Dashboard de Acompanhamento"),
+      el("button", { onclick: () => { aPersonalizar = !aPersonalizar; vistaDashboard(); } }, aPersonalizar ? "✔️ Fechar" : "⚙️ Personalizar")),
+    aPersonalizar && painelPersonalizar(p),
+    visiveis.length === 0
+      ? el("p", { class: "resumo" }, "Todas as caixas estão escondidas. Carrega em ⚙️ Personalizar para as mostrar.")
+      : el("div", { class: "grelha" }, visiveis.map((k) => {
+          const [, fazer, largo] = CARTOES[k];
+          const c = fazer();
+          if (largo) c.style.gridColumn = "1 / -1";
+          return c;
+        }))
   );
+}
+
+function painelPersonalizar(p) {
+  const mudar = (fn) => { fn(); localStorage.setItem(chavePrefs(), JSON.stringify(p)); vistaDashboard(); };
+  const trocar = (i, j) => mudar(() => ([p.ordem[i], p.ordem[j]] = [p.ordem[j], p.ordem[i]]));
+  return el("div", { class: "cartao", style: "margin-bottom:1rem" },
+    el("h2", {}, "⚙️ Personalizar o dashboard"),
+    el("p", { class: "resumo" }, "Escolhe que caixas aparecem e em que ordem. Fica guardado neste browser, só para ti."),
+    tabela(["Mostrar", "Caixa", "Ordem"], p.ordem.map((k, i) =>
+      el("tr", {},
+        el("td", {}, el("input", { type: "checkbox", checked: !p.ocultos.includes(k), onchange: (e) =>
+          mudar(() => (p.ocultos = e.target.checked ? p.ocultos.filter((x) => x !== k) : [...p.ocultos, k])) })),
+        el("td", {}, CARTOES[k][0]),
+        el("td", {},
+          el("button", { title: "Subir", disabled: i === 0, onclick: () => trocar(i, i - 1) }, "⬆️"), " ",
+          el("button", { title: "Descer", disabled: i === p.ordem.length - 1, onclick: () => trocar(i, i + 1) }, "⬇️"))))),
+    el("button", { class: "discreto", style: "margin-top:.5rem", onclick: () => { localStorage.removeItem(chavePrefs()); vistaDashboard(); } }, "↺ Repor como estava"));
 }
 
 function cartaoNovo() {
