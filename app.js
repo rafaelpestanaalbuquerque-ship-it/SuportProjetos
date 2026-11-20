@@ -532,6 +532,7 @@ const urs = (r) =>
   [["ur_sistemas", "UR Sistemas"], ["ur_nagios", "UR Nagios"], ["ur", "UR"], ["pedido_zetes", "Pedido Zetes"]]
     .filter(([k]) => r[k]).map(([k, t]) => `${t}: ${r[k]}`);
 
+let equipCliente = new Map();
 let sessaoAtual = null, clienteCarregado = false, clienteEm = null, cliProjeto = "", cliBusca = "";
 
 async function carregarCliente() {
@@ -543,6 +544,11 @@ async function carregarCliente() {
     porRegisto.get(t.registo_id).push(t);
   });
   dados = { registos: data.registos || [], porRegisto };
+  equipCliente = new Map();
+  (data.equipamentos || []).forEach((e) => {
+    if (!equipCliente.has(e.registo_id)) equipCliente.set(e.registo_id, []);
+    equipCliente.get(e.registo_id).push(e);
+  });
   clienteCarregado = true;
   clienteEm = data.gerado_em;
 }
@@ -706,6 +712,29 @@ async function pdfChecklist(r, botao) {
       headStyles: { fillColor: [37, 99, 235] },
       columnStyles: { 0: { cellWidth: 80 }, 1: { cellWidth: 32 } },
     });
+
+    // POS / SCO (Lojas Novas)
+    if (p.posco) {
+      let equip = equipCliente.get(r.id) || [];
+      if (sessaoAtual) {
+        const { data, error } = await sb.from("equipamentos").select("*").eq("registo_id", r.id).order("ordem");
+        if (error) throw error;
+        equip = data;
+      }
+      ["pos", "sco"].forEach((tipo) => {
+        const g = POSCO[tipo];
+        const lista = equip.filter((e) => e.tipo === tipo).sort((a, b) => a.ordem - b.ordem);
+        autoTable(doc, {
+          startY: doc.lastAutoTable.finalY + 6,
+          head: [[{ content: latin(`${g.titulo} (${lista.filter((e) => e.instalado).length}/${lista.length} instalados)`), colSpan: g.colunas.length + 1 }],
+            ["Número", ...g.colunas.map((c) => c[1])]],
+          body: lista.length ? lista.map((e) => [latin(e.numero) || "-", ...g.colunas.map(([c]) => (e[c] ? "Sim" : "Não"))])
+            : [[{ content: `Sem ${tipo.toUpperCase()} registados.`, colSpan: g.colunas.length + 1 }]],
+          styles: { fontSize: 9 },
+          headStyles: { fillColor: [37, 99, 235] },
+        });
+      });
+    }
     const paginas = doc.getNumberOfPages();
     for (let i = 1; i <= paginas; i++) {
       doc.setPage(i);
