@@ -307,8 +307,8 @@ function cartaoNovo() {
   return el("div", { class: "cartao azul" }, el("h2", {}, "➕ Novo registo"), el("div", { class: "linha-form" }, proj_, loja, data, tipo, botao));
 }
 
-async function criarRegisto(dir, loja, data, tipo) {
-  const novo = { projeto: dir, loja, data };
+async function criarRegisto(dir, loja, data, tipo, extra = {}) {
+  const novo = { projeto: dir, loja, data, ...extra };
   if (dir === "Trabalhos_Extras") novo.tipo_trabalho = tipo || null;
   const { data: r, error } = await sb.from("registos").insert(novo).select("id").single();
   if (error) throw error;
@@ -438,14 +438,220 @@ function vistaProjeto(dir, arquivo) {
   const busca = el("input", { type: "text", placeholder: "🔎 Filtrar (loja, status, UR…)", value: filtro, oninput: () => { filtro = busca.value.toLowerCase().trim(); aplicarFiltro(); } });
   aplicarFiltro();
 
+  const aImportar = !arquivo && importacao?.dir === dir;
   $app.replaceChildren(
     el("h1", {}, `${p.nome} – ${arquivo ? "Arquivo" : "Controlo"}`),
+    aImportar && cartaoImportar(dir),
     el("div", { class: "cartao" },
       el("div", { class: "linha-form", style: "margin-bottom:.6rem" }, busca,
         el("span", { class: "resumo" }, `${lista.length} registo(s)`),
-        el("a", { href: arquivo ? `#/projeto/${dir}` : `#/arquivo/${dir}` }, arquivo ? "← Voltar ao Controlo" : "📦 Ver arquivo")),
+        el("a", { href: arquivo ? `#/projeto/${dir}` : `#/arquivo/${dir}` }, arquivo ? "← Voltar ao Controlo" : "📦 Ver arquivo"),
+        !arquivo && el("button", { onclick: () => { importacao = aImportar ? null : { dir }; render(); } }, aImportar ? "✖ Fechar importação" : "📥 Importar CSV")),
       tabela(["Loja", "Data", "Status", "URs", "Responsável", "Checklist", ""], corpo))
   );
+}
+
+// ---------- Importar CSV (Controlo de um projeto; só existe com login) ----------
+// Igual ao Validar Excel do Obsidian: lojas que não existem são criadas a partir do modelo;
+// nas que existem, a data é corrigida se for diferente. Canceladas/concluídas no CSV são ignoradas.
+let importacao = null; // { dir, nome, linhas, titulos, colLoja, colData, colStatus, ignorar }
+const SEM_DATA = "⏸️ Pendente";
+
+function linhasCsv(texto) {
+  texto = texto.replace(/^﻿/, "");
+  const primeira = texto.split(/\r?\n/)[0] || "";
+  const sep = (primeira.match(/;/g) || []).length > (primeira.match(/,/g) || []).length ? ";" : ",";
+  const linhas = [];
+  let linha = [], campo = "", aspas = false;
+  for (let i = 0; i < texto.length; i++) {
+    const c = texto[i];
+    if (aspas) {
+      if (c === '"') {
+        if (texto[i + 1] === '"') { campo += '"'; i++; } else aspas = false;
+      } else campo += c;
+    } else if (c === '"') aspas = true;
+    else if (c === sep) { linha.push(campo.trim()); campo = ""; }
+    else if (c === "\n" || c === "\r") {
+      if (c === "\r" && texto[i + 1] === "\n") i++;
+      linha.push(campo.trim());
+      linhas.push(linha);
+      linha = [];
+      campo = "";
+    } else campo += c;
+  }
+  if (campo || linha.length) { linha.push(campo.trim()); linhas.push(linha); }
+  return linhas;
+}
+
+const eLoja = (v) => /^\d{1,5}$/.test(String(v ?? "").trim().replace(/\.0+$/, ""));
+function normalizarLoja(v) {
+  const n = String(v ?? "").trim().replace(/\.0+$/, "");
+  return /^\d+$/.test(n) ? n.padStart(4, "0") : n;
+}
+
+const MESES = ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"];
+// mesPrimeiro = true para datas mês/dia/ano (ex.: CSV do ST)
+function normalizarData(v, mesPrimeiro = false) {
+  const t = String(v ?? "").trim();
+  if (!t) return null;
+  if (/^\d+(\.\d+)?$/.test(t)) {
+    // Número de série de data do Excel
+    const d = new Date(Math.round((Number(t) - 25569) * 86400 * 1000));
+    return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`;
+  }
+  // Mês por extenso, com ou sem ano: "17/Dezembro", "09/Dez", "17 de dezembro de 2026"
+  let m = t.match(/^(\d{1,2})\s*(?:[\/\-.]|\s+de\s+|\s)\s*([a-zà-ú]{3,})\.?(?:\s*(?:[\/\-.]|\s+de\s+|\s)\s*(\d{4}))?/i);
+  if (m) {
+    const mes = MESES.indexOf(m[2].toLowerCase().slice(0, 3));
+    if (mes < 0) return null;
+    const dia = Number(m[1]);
+    let ano = m[3] ? Number(m[3]) : new Date().getFullYear();
+    if (!m[3] && Date.now() - new Date(ano, mes, dia).getTime() > 60 * 86400 * 1000) ano++;
+    return `${ano}-${pad(mes + 1)}-${pad(dia)}`;
+  }
+  m = t.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{4})/);
+  if (m) {
+    const [dia, mes] = mesPrimeiro ? [m[2], m[1]] : [m[1], m[2]];
+    return `${m[3]}-${pad(mes)}-${pad(dia)}`;
+  }
+  m = t.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return m ? `${m[1]}-${m[2]}-${m[3]}` : null;
+}
+
+async function lerCsv(dir, ficheiro) {
+  const buf = await ficheiro.arrayBuffer();
+  let texto;
+  try { texto = new TextDecoder("utf-8", { fatal: true }).decode(buf); } catch { texto = new TextDecoder("windows-1252").decode(buf); }
+  const linhas = linhasCsv(texto).filter((l) => l.some((c) => c !== ""));
+  if (!linhas.length) return avisar("O ficheiro está vazio.");
+
+  // Cabeçalho: linhas antes da 1.ª loja. Loja na coluna "Loja", senão na 1.ª.
+  const procura = (cab, re) => (cab ? cab.findIndex((c) => re.test(String(c ?? "").trim())) : -1);
+  const cabLoja = linhas.find((l) => l.some((c) => /^(n\.?º\s*)?loja/i.test(c)));
+  const colLoja = Math.max(procura(cabLoja, /^(n\.?º\s*)?loja/i), 0);
+  const iPrimeira = Math.max(linhas.findIndex((l) => eLoja(l[colLoja])), 0);
+  const antes = linhas.slice(0, iPrimeira).reverse();
+  const cabData = antes.find((l) => l.some((c) => /data/i.test(c)));
+  const colData = [/data\s*(de\s*)?abertura/i, /data\s+de\s+interven/i, /data/i].map((re) => procura(cabData, re)).find((i) => i >= 0) ?? -1;
+  const cabStatus = antes.find((l) => l.some((c) => /^(status|estado)$/i.test(c)));
+  const colStatus = procura(cabStatus, /^(status|estado)$/i);
+
+  const cab = antes.find((l) => l.filter(Boolean).length > 1) || [];
+  const nCol = Math.max(...linhas.map((l) => l.length));
+  const titulos = Array.from({ length: nCol }, (_, i) => `${i + 1}. ${cab[i] || "(sem título)"}`);
+  importacao = { dir, nome: ficheiro.name, linhas, titulos, colLoja, colData, colStatus, ignorar: new Set() };
+}
+
+// O que fazer com cada loja do CSV
+function analisarCsv(imp) {
+  const mesPrimeiro = imp.colData >= 0 && imp.linhas.some((l) => {
+    const m = String(l[imp.colData] ?? "").trim().match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.]\d{4}/);
+    return m && Number(m[2]) > 12;
+  });
+  const doProjeto = dados.registos.filter((r) => r.projeto === imp.dir);
+  const vistas = new Set();
+  const res = [];
+  imp.linhas.forEach((l) => {
+    if (!eLoja(l[imp.colLoja])) return;
+    const loja = normalizarLoja(l[imp.colLoja]);
+    if (vistas.has(loja)) return;
+    vistas.add(loja);
+    const bruto = imp.colData >= 0 ? String(l[imp.colData] ?? "").trim() : "";
+    const data = bruto ? normalizarData(bruto, mesPrimeiro) : null;
+    const tem = (re, exato) => (imp.colStatus >= 0 ? re.test(String(l[imp.colStatus] ?? "")) : l.some((c) => exato.test(c.trim())));
+    const iguais = doProjeto.filter((r) => normalizarLoja(r.loja) === loja);
+    const r = iguais.find((x) => !x.arquivado && x.status !== CANCELADO) || iguais[0];
+    const x = { loja, data, r, acao: "ok", detalhe: "" };
+    if (bruto && !data) Object.assign(x, { acao: "erro", detalhe: `Data não reconhecida: "${bruto}"` });
+    else if (tem(/cancel/i, /^cancelad[oa]s?$/i)) Object.assign(x, { acao: "ignorar", detalhe: "Cancelada no CSV" });
+    else if (tem(/^\s*conclu[íi]d[oa]\s*$/i, /^conclu[íi]d[oa]$/i)) Object.assign(x, { acao: "ignorar", detalhe: "Concluída no CSV" });
+    else if (!r) {
+      if (data && data < hoje()) Object.assign(x, { acao: "ignorar", detalhe: "Não existe e a data já passou" });
+      else Object.assign(x, { acao: "criar", detalhe: data ? "Nova loja" : `Nova loja sem data (fica ${SEM_DATA})` });
+    } else if (r.arquivado) x.detalhe = "Já está no arquivo (não mexe)";
+    else if (r.status === CANCELADO) x.detalhe = "Cancelada no site (não mexe)";
+    else if (!data) x.detalhe = "Sem data no CSV (não mexe)";
+    else if (r.data === data) x.detalhe = "Data certa";
+    else Object.assign(x, { acao: "data", detalhe: `${fmt(r.data)} → ${fmt(data)}` });
+    res.push(x);
+  });
+  return res;
+}
+
+function cartaoImportar(dir) {
+  const imp = importacao;
+  const ficheiro = el("input", { type: "file", accept: ".csv,text/csv" });
+  ficheiro.onchange = async () => {
+    const f = ficheiro.files[0];
+    if (!f) return;
+    try { await lerCsv(dir, f); } catch (e) { avisar(`Erro a ler o CSV: ${e.message}`); }
+    render();
+  };
+  const partes = [
+    el("h2", {}, "📥 Importar CSV"),
+    el("p", { class: "resumo" }, "Lojas que não existem são criadas com a checklist do modelo; nas que já existem, a data é corrigida se for diferente. Nada é gravado antes de carregares em Confirmar."),
+    el("div", { class: "linha-form" }, ficheiro, imp.nome && el("span", { class: "etiqueta" }, imp.nome)),
+  ];
+  if (imp.linhas) {
+    const coluna = (chave, comNenhuma) => {
+      const s = el("select", { onchange: () => { imp[chave] = Number(s.value); render(); } },
+        comNenhuma && el("option", { value: "-1" }, "— nenhuma —"), imp.titulos.map((t, i) => el("option", { value: String(i) }, t)));
+      s.value = String(imp[chave]);
+      return s;
+    };
+    const res = analisarCsv(imp);
+    const ROTULO = { criar: "➕ Criar", data: "✏️ Mudar data", ok: "✔️ Sem mudanças", ignorar: "⏭️ Ignorada", erro: "⚠️ Erro" };
+    const grava = (x) => ["criar", "data"].includes(x.acao);
+    const aGravar = res.filter((x) => grava(x) && !imp.ignorar.has(x.loja));
+
+    const confirmar = el("button", { class: "cta", disabled: aGravar.length === 0 }, `✅ Confirmar (${aGravar.length})`);
+    confirmar.onclick = async () => {
+      confirmar.disabled = true;
+      confirmar.textContent = "A gravar…";
+      let criadas = 0, mudadas = 0;
+      const erros = [];
+      for (const x of aGravar) {
+        try {
+          if (x.acao === "criar") {
+            await criarRegisto(dir, x.loja, x.data, "", x.data ? {} : { status: SEM_DATA });
+            criadas++;
+          } else {
+            // Estava pendente só por falta de data: passa a por iniciar (como no Obsidian)
+            const extra = vazio(x.r.data) && x.r.status === SEM_DATA ? { status: "⏳ Por iniciar" } : {};
+            const { error } = await sb.from("registos").update({ data: x.data, ...extra }).eq("id", x.r.id);
+            if (error) throw error;
+            mudadas++;
+          }
+        } catch (e) {
+          erros.push(`${x.loja}: ${e.message}`);
+        }
+      }
+      importacao = null;
+      await carregar();
+      render();
+      avisar(`Importação: ${criadas} loja(s) criada(s), ${mudadas} data(s) corrigida(s)${erros.length ? `, ${erros.length} com erro` : ""}.`);
+      if (erros.length) alert(`Lojas com erro:\n- ${erros.join("\n- ")}`);
+    };
+
+    partes.push(
+      el("div", { class: "linha-form", style: "margin:.6rem 0" },
+        "Coluna da loja:", coluna("colLoja", false), "Coluna da data:", coluna("colData", true), "Coluna do estado:", coluna("colStatus", true)),
+      el("p", { class: "resumo" }, Object.entries(ROTULO).map(([a, t]) => `${t}: ${res.filter((x) => x.acao === a).length}`).join(" · ")),
+      res.length === 0
+        ? el("p", {}, "Não encontrei números de loja na coluna escolhida.")
+        : tabela(["", "Loja", "Data no CSV", "Data no site", "Ação", "Detalhe"], res.map((x) =>
+            el("tr", {},
+              el("td", {}, grava(x) && el("input", { type: "checkbox", title: "Desmarca para não gravar esta loja", checked: !imp.ignorar.has(x.loja),
+                onchange: (e) => { if (e.target.checked) imp.ignorar.delete(x.loja); else imp.ignorar.add(x.loja); render(); } })),
+              el("td", {}, x.r ? linkLoja(x.r) : x.loja),
+              el("td", {}, fmt(x.data)),
+              el("td", {}, x.r ? fmt(x.r.data) : "-"),
+              el("td", {}, ROTULO[x.acao]),
+              el("td", {}, x.detalhe)))),
+      el("div", { class: "linha-form", style: "margin-top:.6rem" }, confirmar,
+        el("button", { onclick: () => { importacao = null; render(); } }, "Cancelar")));
+  }
+  return el("div", { class: "cartao laranja", style: "margin-bottom:1rem" }, partes);
 }
 
 // ---------- Um registo ----------
