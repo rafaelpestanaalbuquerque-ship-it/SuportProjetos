@@ -35,7 +35,8 @@ const C = {
 
 // Um projeto por pasta do Obsidian (o id é o nome da pasta).
 // obrigatorios: campos que têm de estar preenchidos para arquivar (Trabalhos em atraso)
-// urs: URs verificados em "Sem UR"
+// urs: URs mostrados no Controlo
+// semUr: URs verificados em "Sem UR" (como no Obsidian: só o UR Sistemas; nos Trabalhos Extras, o UR)
 // prazos: campo vazio a X meses da data da loja → entra em atraso antes da data
 // sempre: aparece no Ongoing sempre que tenha data (mesmo para lá dos 14 dias)
 // respTarefas: a checklist tem a coluna Responsável (e acusa "sem responsável")
@@ -45,6 +46,7 @@ export const PROJETOS = {
     campos: [C.data, C.status, C.ur_sistemas, C.ur_nagios, C.responsavel],
     obrigatorios: [C.ur_sistemas, C.ur_nagios],
     urs: [C.ur_sistemas, C.ur_nagios],
+    semUr: [C.ur_sistemas],
     respTarefas: true,
   },
   FK: {
@@ -52,6 +54,7 @@ export const PROJETOS = {
     campos: [C.data, C.status, C.ur_sistemas, C.ur_nagios, C.responsavel, C.lit, C.ds, C.portas_axis, C.switch3],
     obrigatorios: [C.ur_sistemas, C.ur_nagios],
     urs: [C.ur_sistemas, C.ur_nagios],
+    semUr: [C.ur_sistemas],
     respTarefas: true,
   },
   Pyramid_Rollout: {
@@ -65,6 +68,7 @@ export const PROJETOS = {
     campos: [C.data, C.data_staging, C.status, C.regional, C.telemovel, C.ip_lan, C.ur_sistemas, C.ur_nagios, C.pedido_zetes, C.responsavel],
     obrigatorios: [C.ur_sistemas, C.ur_nagios, C.pedido_zetes],
     urs: [C.ur_sistemas, C.ur_nagios],
+    semUr: [C.ur_sistemas],
     prazos: [[C.ur_sistemas, 3], [C.pedido_zetes, 1]], // [campo, meses antes da data]
     sempre: true,
     posco: {
@@ -77,6 +81,7 @@ export const PROJETOS = {
     campos: [C.data, C.status, C.tipo_trabalho, C.ur, C.responsavel, C.data_conclusao],
     obrigatorios: [C.ur],
     urs: [C.ur],
+    semUr: [C.ur],
   },
 };
 

@@ -331,20 +331,22 @@ async function criarRegisto(dir, loja, data, tipo, extra = {}) {
 }
 
 function cartaoOngoing() {
-  const limite = maisDias(hoje(), 14);
+  // Só a semana atual (segunda a domingo), incluindo as lojas desta semana já concluídas
+  const inicio = maisDias(hoje(), -((paraDate(hoje()).getDay() + 6) % 7)); // segunda-feira
+  const limite = maisDias(inicio, 6); // domingo
   const lista = dados.registos
-    .filter((r) => !r.arquivado && !FECHADOS.includes(r.status) && r.data && (r.data <= limite || proj(r).sempre))
+    .filter((r) => r.status !== CANCELADO && r.data && r.data >= inicio && r.data <= limite && (!r.arquivado || r.status === CONCLUIDO))
     .sort(porData);
   const detalhes = (r) =>
     [["ur_sistemas", "UR Sistemas"], ["ur_nagios", "UR Nagios"], ["ur", "UR"], ["pedido_zetes", "Pedido Zetes"]]
       .filter(([k]) => r[k]).map(([k, t]) => `${t}: ${r[k]}`).join(" · ") || "-";
   return el("div", { class: "cartao verde" },
-    el("h2", {}, "📅 Ongoing"),
-    el("p", { class: "resumo" }, `De ${fmt(hoje())} a ${fmt(limite)} · ${lista.length} trabalho(s) · Lojas Novas aparecem sempre que tenham data`),
+    el("h2", {}, "📅 Ongoing – semana atual"),
+    el("p", { class: "resumo" }, `De segunda ${fmt(inicio)} a domingo ${fmt(limite)} · ${lista.length} trabalho(s)`),
     lista.length === 0
-      ? el("p", {}, "Sem trabalhos planeados para as próximas 2 semanas.")
+      ? el("p", {}, "Sem trabalhos nesta semana.")
       : tabela(["Data", "Quando", "Projeto", "Loja", "Status", "Detalhes", "Checklist"], lista.map((r) =>
-          el("tr", {}, el("td", {}, fmt(r.data)), el("td", {}, quando(r.data)), el("td", {}, proj(r).nome), el("td", {}, linkLoja(r)),
+          el("tr", {}, el("td", {}, fmt(r.data)), el("td", {}, r.status === CONCLUIDO ? "✅ Feito" : quando(r.data)), el("td", {}, proj(r).nome), el("td", {}, linkLoja(r)),
             el("td", {}, r.status), el("td", {}, detalhes(r)), el("td", {}, progresso(r)))))
   );
 }
@@ -382,7 +384,7 @@ function cartaoAtraso() {
 function cartaoSemUR() {
   const lista = ativos()
     .filter((r) => r.data)
-    .map((r) => ({ r, falta: proj(r).urs.filter(([c]) => vazio(r[c])) }))
+    .map((r) => ({ r, falta: (proj(r).semUr || []).filter(([c]) => vazio(r[c])) }))
     .filter((x) => x.falta.length)
     .sort((a, b) => porData(a.r, b.r));
   const passados = lista.filter((x) => x.r.data < hoje()).length;
@@ -390,7 +392,7 @@ function cartaoSemUR() {
   return el("div", { class: "cartao roxo" },
     el("h2", {}, "🔖 Sem UR"),
     lista.length === 0
-      ? el("p", {}, "✅ Todos os trabalhos em curso têm os URs preenchidos.")
+      ? el("p", {}, "✅ Todos os trabalhos em curso têm o UR Sistemas preenchido.")
       : [
           el("p", { class: "resumo" }, `${lista.length} trabalho(s) sem UR · ${passados} com a data já ultrapassada · escreve o UR e carrega Enter`),
           tabela(["Projeto", "Loja", "Data", "Quando", "Status", "URs em falta"], lista.map(({ r, falta }) =>
