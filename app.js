@@ -240,7 +240,8 @@ function prefsDashboard() {
   Object.keys(CARTOES).forEach((k) => !ordem.includes(k) && ordem.push(k)); // caixas novas vão para o fim
   return { ordem, ocultos: (p?.ocultos || []).filter((k) => k in CARTOES) };
 }
-// let aPersonalizar = false;
+
+let aPersonalizar = false;
 
 function vistaDashboard() {
   const p = prefsDashboard();
