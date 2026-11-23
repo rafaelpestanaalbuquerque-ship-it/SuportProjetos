@@ -76,3 +76,4 @@ button.discreto { border: none; background: none; color: var(--suave); }
 .chips { display: flex; gap: .3rem; flex-wrap: wrap; }
 .chips button.ativo { background: var(--azul); border-color: var(--azul); color: #fff; }
 a.botao { border: 1px solid var(--azul); border-radius: 6px; padding: .3rem .7rem; }
+.chip { display: inline-flex; align-items: center; gap: .2rem; padding: .1rem .45rem; border: 1px solid var(--linha); border-radius: 999px; font-size: 12px; cursor: pointer; white-space: nowrap; }

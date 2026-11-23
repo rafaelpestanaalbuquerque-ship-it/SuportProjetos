@@ -231,16 +231,52 @@ const CARTOES = {
   atraso: ["⚠️ Em atraso", cartaoAtraso],
 };
 
-// Ordem e caixas escondidas de cada pessoa (guardado neste browser, por email)
+// Preferências de cada pessoa: caixas escondidas, ordem e projetos escondidos em cada caixa.
+// Guardadas no Supabase (tabela preferencias, supabase/preferencias.sql), iguais em qualquer PC.
+// Há uma cópia no browser, usada se a tabela ainda não existir.
+const CAIXAS_COM_PROJETOS = ["ongoing", "semur", "atraso"];
 const chavePrefs = () => `lidl.dashboard.${sessaoAtual?.user?.email || ""}`;
-function prefsDashboard() {
-  let p = null;
-  try { p = JSON.parse(localStorage.getItem(chavePrefs())); } catch { /* preferências estragadas: usa as de origem */ }
+let prefsGuardadas = null, prefsNoSupabase = true;
+
+function limparPrefs(p) {
   const ordem = (p?.ordem || []).filter((k) => k in CARTOES);
   Object.keys(CARTOES).forEach((k) => !ordem.includes(k) && ordem.push(k)); // caixas novas vão para o fim
-  return { ordem, ocultos: (p?.ocultos || []).filter((k) => k in CARTOES) };
+  const projetos = {};
+  CAIXAS_COM_PROJETOS.forEach((k) => (projetos[k] = (p?.projetos?.[k] || []).filter((d) => d in PROJETOS)));
+  return { ordem, ocultos: (p?.ocultos || []).filter((k) => k in CARTOES), projetos };
 }
 
+function prefsLocais() {
+  try { return JSON.parse(localStorage.getItem(chavePrefs())); } catch { return null; } // estragadas: usa as de origem
+}
+
+async function carregarPrefs() {
+  const local = prefsLocais();
+  const { data, error } = await sb.from("preferencias").select("dashboard").maybeSingle();
+  if (error) { prefsNoSupabase = false; prefsGuardadas = local; return; } // tabela ainda não criada
+  prefsNoSupabase = true;
+  if (data) prefsGuardadas = data.dashboard;
+  else if (local) await gravarPrefs(limparPrefs(local)); // 1.ª vez: passa a escolha deste browser para o Supabase
+}
+
+async function gravarPrefs(p) {
+  prefsGuardadas = p;
+  localStorage.setItem(chavePrefs(), JSON.stringify(p));
+  if (!prefsNoSupabase) return;
+  const { error } = await sb.from("preferencias").upsert({ user_id: sessaoAtual.user.id, dashboard: p, atualizado_em: new Date().toISOString() });
+  if (error) avisar(`Não foi possível guardar no Supabase (fica só neste browser): ${error.message}`);
+}
+
+const prefsDashboard = () => limparPrefs(prefsGuardadas);
+// Filtro de uma caixa: tira os projetos que a pessoa escondeu nela
+const naCaixa = (caixa) => {
+  const escondidos = prefsDashboard().projetos[caixa] || [];
+  return (r) => !escondidos.includes(r.projeto);
+};
+const notaFiltro = (caixa) => {
+  const n = (prefsDashboard().projetos[caixa] || []).length;
+  return n ? el("span", { class: "etiqueta", title: "Muda em ⚙️ Personalizar" }, `${n} projeto(s) escondido(s)`) : null;
+};
 let aPersonalizar = false;
 
 function vistaDashboard() {
@@ -263,20 +299,29 @@ function vistaDashboard() {
 }
 
 function painelPersonalizar(p) {
-  const mudar = (fn) => { fn(); localStorage.setItem(chavePrefs(), JSON.stringify(p)); vistaDashboard(); };
+  const mudar = (fn) => { fn(); gravarPrefs(p); vistaDashboard(); }; // gravarPrefs muda as preferências logo, antes de esperar pelo Supabase
   const trocar = (i, j) => mudar(() => ([p.ordem[i], p.ordem[j]] = [p.ordem[j], p.ordem[i]]));
+  const projetosDa = (k) => !CAIXAS_COM_PROJETOS.includes(k) ? el("span", { class: "resumo" }, "-")
+    : el("div", { class: "chips" }, Object.entries(PROJETOS).map(([dir, pr]) =>
+        el("label", { class: "chip" },
+          el("input", { type: "checkbox", checked: !p.projetos[k].includes(dir), onchange: (e) =>
+            mudar(() => (p.projetos[k] = e.target.checked ? p.projetos[k].filter((d) => d !== dir) : [...p.projetos[k], dir])) }),
+          ` ${pr.nome}`)));
   return el("div", { class: "cartao", style: "margin-bottom:1rem" },
     el("h2", {}, "⚙️ Personalizar o dashboard"),
-    el("p", { class: "resumo" }, "Escolhe que caixas aparecem e em que ordem. Fica guardado neste browser, só para ti."),
-    tabela(["Mostrar", "Caixa", "Ordem"], p.ordem.map((k, i) =>
+    el("p", { class: "resumo" }, prefsNoSupabase
+      ? "Escolhe que caixas aparecem, em que ordem e que projetos mostra cada uma. Fica guardado na tua conta (igual em qualquer PC) e só muda o teu dashboard."
+      : "⚠️ A tabela de preferências ainda não existe no Supabase (corre supabase/preferencias.sql): por agora fica guardado só neste browser."),
+    tabela(["Mostrar", "Caixa", "Ordem", "Projetos"], p.ordem.map((k, i) =>
       el("tr", {},
         el("td", {}, el("input", { type: "checkbox", checked: !p.ocultos.includes(k), onchange: (e) =>
           mudar(() => (p.ocultos = e.target.checked ? p.ocultos.filter((x) => x !== k) : [...p.ocultos, k])) })),
         el("td", {}, CARTOES[k][0]),
         el("td", {},
           el("button", { title: "Subir", disabled: i === 0, onclick: () => trocar(i, i - 1) }, "⬆️"), " ",
-          el("button", { title: "Descer", disabled: i === p.ordem.length - 1, onclick: () => trocar(i, i + 1) }, "⬇️"))))),
-    el("button", { class: "discreto", style: "margin-top:.5rem", onclick: () => { localStorage.removeItem(chavePrefs()); vistaDashboard(); } }, "↺ Repor como estava"));
+          el("button", { title: "Descer", disabled: i === p.ordem.length - 1, onclick: () => trocar(i, i + 1) }, "⬇️")),
+        el("td", {}, projetosDa(k))))),
+    el("button", { class: "discreto", style: "margin-top:.5rem", onclick: () => { gravarPrefs({}); vistaDashboard(); } }, "↺ Repor como estava"));
 }
 
 function cartaoNovo() {
@@ -336,13 +381,14 @@ function cartaoOngoing() {
   const inicio = maisDias(hoje(), -((paraDate(hoje()).getDay() + 6) % 7)); // segunda-feira
   const limite = maisDias(inicio, 6); // domingo
   const lista = dados.registos
+    .filter(naCaixa("ongoing"))
     .filter((r) => r.status !== CANCELADO && r.data && r.data >= inicio && r.data <= limite && (!r.arquivado || r.status === CONCLUIDO))
     .sort(porData);
   const detalhes = (r) =>
     [["ur_sistemas", "UR Sistemas"], ["ur_nagios", "UR Nagios"], ["ur", "UR"], ["pedido_zetes", "Pedido Zetes"]]
       .filter(([k]) => r[k]).map(([k, t]) => `${t}: ${r[k]}`).join(" · ") || "-";
   return el("div", { class: "cartao verde" },
-    el("h2", {}, "📅 Ongoing – semana atual"),
+    el("h2", {}, "📅 Ongoing – semana atual ", notaFiltro("ongoing")),
     el("p", { class: "resumo" }, `De segunda ${fmt(inicio)} a domingo ${fmt(limite)} · ${lista.length} trabalho(s)`),
     lista.length === 0
       ? el("p", {}, "Sem trabalhos nesta semana.")
@@ -353,8 +399,9 @@ function cartaoOngoing() {
 }
 
 function cartaoAtraso() {
-  const atrasadas = ativos().filter((r) => r.data && r.data < hoje()).map((r) => ({ r, falta: emFalta(r), prazos: [] }));
-  const antecipadas = ativos()
+  const base = ativos().filter(naCaixa("atraso"));
+  const atrasadas = base.filter((r) => r.data && r.data < hoje()).map((r) => ({ r, falta: emFalta(r), prazos: [] }));
+  const antecipadas = base
     .map((r) => ({ r, prazos: prazosFalhados(r) }))
     .filter((x) => x.prazos.length)
     .map((x) => ({ ...x, falta: x.prazos.map((f) => `${f.nome} em falta (prazo ${fmt(f.limite)})`) }));
@@ -362,7 +409,7 @@ function cartaoAtraso() {
   const prontas = atrasadas.filter((x) => x.falta.length === 0).length;
 
   return el("div", { class: "cartao vermelho" },
-    el("h2", {}, "⚠️ Em atraso"),
+    el("h2", {}, "⚠️ Em atraso ", notaFiltro("atraso")),
     lista.length === 0
       ? el("p", {}, "✅ Não há trabalhos em atraso.")
       : [
@@ -383,7 +430,7 @@ function cartaoAtraso() {
 }
 
 function cartaoSemUR() {
-  const lista = ativos()
+  const lista = ativos().filter(naCaixa("semur"))
     .filter((r) => r.data)
     .map((r) => ({ r, falta: (proj(r).semUr || []).filter(([c]) => vazio(r[c])) }))
     .filter((x) => x.falta.length)
@@ -391,7 +438,7 @@ function cartaoSemUR() {
   const passados = lista.filter((x) => x.r.data < hoje()).length;
 
   return el("div", { class: "cartao roxo" },
-    el("h2", {}, "🔖 Sem UR"),
+    el("h2", {}, "🔖 Sem UR ", notaFiltro("semur")),
     lista.length === 0
       ? el("p", {}, "✅ Todos os trabalhos em curso têm o UR Sistemas preenchido.")
       : [
@@ -1072,6 +1119,7 @@ async function iniciar(sessao) {
   sessaoAtual = sessao;
   clienteCarregado = false;
   if (!sessao) {
+    prefsGuardadas = null;
     if (canal) { sb.removeChannel(canal); canal = null; }
     return rotaSemLogin();
   }
@@ -1079,7 +1127,7 @@ async function iniciar(sessao) {
   document.getElementById("topo").hidden = false;
   document.getElementById("utilizador").textContent = sessao.user.email;
   try {
-    await carregar();
+    await Promise.all([carregar(), carregarPrefs().catch(() => (prefsNoSupabase = false))]);
   } catch (e) {
     return $app.replaceChildren(el("p", {}, `Erro a ler os dados: ${e.message}`));
   }
