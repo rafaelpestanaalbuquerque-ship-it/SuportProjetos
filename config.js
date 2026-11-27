@@ -83,6 +83,22 @@ export const PROJETOS = {
     urs: [C.ur],
     semUr: [C.ur],
   },
+  OCS: {
+    nome: "🧾 OCS",
+    campos: [C.data, C.status, C.ur_sistemas, C.ur_nagios, C.responsavel],
+    obrigatorios: [C.ur_sistemas, C.ur_nagios],
+    urs: [C.ur_sistemas, C.ur_nagios],
+    semUr: [C.ur_sistemas],
+    respTarefas: true,
+  },
+  "Stores_4.0": {
+    nome: "🏪 Stores 4.0",
+    campos: [C.data, C.status, C.ur_sistemas, C.ur_nagios, C.responsavel],
+    obrigatorios: [C.ur_sistemas, C.ur_nagios],
+    urs: [C.ur_sistemas, C.ur_nagios],
+    semUr: [C.ur_sistemas],
+    respTarefas: true,
+  },
 };
 
 // Colunas de cada tabela POS/SCO: [propriedade, título]
